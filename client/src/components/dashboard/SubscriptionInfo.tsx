@@ -1,199 +1,131 @@
-import { useState } from "react";
 import { Link } from "wouter";
-import { Subscription } from "@shared/types";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Check, ChevronRight } from "lucide-react";
-import { apiRequest } from "@/lib/queryClient";
-import { useToast } from "@/hooks/use-toast";
+import { SUBSCRIPTION_PLANS } from "@shared/schema";
+import { format } from "date-fns";
+import { Check } from "lucide-react";
 
-interface SubscriptionInfoProps {
-  subscription: Subscription;
-  onUpgrade?: () => void;
-}
-
-const SubscriptionInfo = ({ subscription, onUpgrade }: SubscriptionInfoProps) => {
-  const { toast } = useToast();
-  const [isLoading, setIsLoading] = useState(false);
-
-  // Format the next payment date
-  const formatNextPaymentDate = (date: Date) => {
-    return new Date(date).toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric'
-    });
+type SubscriptionInfoProps = {
+  subscription?: {
+    plan: string;
+    startDate: string;
+    endDate: string;
+    isActive: boolean;
+    autoRenew: boolean;
   };
-
-  // Handle upgrade button click
-  const handleUpgrade = async () => {
-    if (onUpgrade) {
-      onUpgrade();
-      return;
-    }
-
-    try {
-      setIsLoading(true);
-      await apiRequest("POST", "/api/subscriptions/upgrade", { 
-        currentPlan: subscription.plan 
-      });
-      toast({
-        title: "Upgrade requested",
-        description: "You'll be redirected to complete your upgrade.",
-        duration: 5000,
-      });
-    } catch (error) {
-      toast({
-        title: "Error",
-        description: "Failed to process upgrade request. Please try again.",
-        variant: "destructive",
-        duration: 5000,
-      });
-    } finally {
-      setIsLoading(false);
-    }
+  profile?: {
+    casesRemaining: number;
   };
+};
 
-  // Determine remaining cases message
-  const getRemainingCasesMessage = () => {
-    if (subscription.plan === "Basic") {
-      return `${subscription.casesUsed} of 5 used`;
-    } else if (subscription.plan === "Pro") {
-      return `${subscription.casesUsed} of 20 used`;
-    } else {
-      return "Unlimited cases";
-    }
-  };
+const SubscriptionInfo = ({ subscription, profile }: SubscriptionInfoProps) => {
+  if (!subscription) return null;
+
+  const renewalDate = subscription.endDate ? new Date(subscription.endDate) : new Date();
+  const planLabel = subscription.plan === SUBSCRIPTION_PLANS.BASIC
+    ? "Basic Plan"
+    : subscription.plan === SUBSCRIPTION_PLANS.PRO
+      ? "Pro Plan"
+      : "Enterprise Plan";
+
+  const maxCases = subscription.plan === SUBSCRIPTION_PLANS.BASIC
+    ? 5
+    : subscription.plan === SUBSCRIPTION_PLANS.PRO
+      ? 20
+      : 999;
+
+  const usedCases = maxCases - (profile?.casesRemaining || 0);
+  const percentUsed = (usedCases / maxCases) * 100;
 
   return (
-    <Card className="bg-white rounded-lg shadow-card">
-      <CardContent className="p-6">
-        <div className="flex flex-col md:flex-row items-start md:items-center justify-between mb-6">
-          <div>
-            <div className="flex items-center">
-              <h3 className="text-lg font-semibold text-primary">{subscription.plan} Plan</h3>
-              <span className="ml-2 px-2 py-1 bg-accent bg-opacity-10 text-accent text-xs font-medium rounded">
-                Active
+    <div className="mb-12">
+      <div className="flex items-center justify-between mb-6">
+        <h2 className="text-xl font-semibold text-primary">Your Subscription</h2>
+        <Link href="/subscription" className="text-accent hover:underline text-sm font-medium">
+          Manage Subscription
+        </Link>
+      </div>
+
+      <Card className="bg-white rounded-lg card-shadow">
+        <CardContent className="p-6">
+          <div className="flex flex-col md:flex-row items-start md:items-center justify-between">
+            <div>
+              <span className="bg-accent bg-opacity-10 text-accent text-xs font-medium px-2.5 py-1 rounded-full">
+                {planLabel}
               </span>
-            </div>
-            <p className="text-sm text-secondary mt-1">
-              Billed {subscription.billingCycle} - Next payment on {formatNextPaymentDate(subscription.nextBillingDate)}
-            </p>
-          </div>
-          <div className="mt-4 md:mt-0">
-            <span className="text-2xl font-bold text-primary">
-              ${subscription.amount}
-              <span className="text-sm font-medium text-secondary">/{subscription.billingCycle === "monthly" ? "month" : "year"}</span>
-            </span>
-          </div>
-        </div>
-
-        <div className="border-t border-gray-200 pt-6">
-          <h4 className="text-sm font-semibold text-primary mb-4">Plan Features</h4>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="flex items-start">
-              <Check className="h-5 w-5 text-success mr-2 flex-shrink-0" />
-              <div>
-                <h5 className="text-sm font-medium text-primary">
-                  {subscription.plan === "Basic" ? "5 Cases per Month" : 
-                   subscription.plan === "Pro" ? "20 Cases per Month" : 
-                   "Unlimited Cases"}
-                </h5>
-                <p className="text-xs text-secondary">{getRemainingCasesMessage()}</p>
-              </div>
-            </div>
-            
-            <div className="flex items-start">
-              <Check className="h-5 w-5 text-success mr-2 flex-shrink-0" />
-              <div>
-                <h5 className="text-sm font-medium text-primary">
-                  {subscription.plan !== "Basic" ? "Priority Matching" : "Standard Matching"}
-                </h5>
-                <p className="text-xs text-secondary">
-                  {subscription.plan !== "Basic" 
-                    ? "Match with top-rated investigators first" 
-                    : "Regular investigator matching"}
-                </p>
-              </div>
-            </div>
-            
-            <div className="flex items-start">
-              <Check className="h-5 w-5 text-success mr-2 flex-shrink-0" />
-              <div>
-                <h5 className="text-sm font-medium text-primary">
-                  {subscription.plan === "Enterprise" 
-                    ? "Enterprise Case Management" 
-                    : subscription.plan === "Pro" 
-                      ? "Advanced Case Management" 
-                      : "Basic Case Management"}
-                </h5>
-                <p className="text-xs text-secondary">
-                  {subscription.plan === "Enterprise" 
-                    ? "Custom reporting and unlimited storage" 
-                    : subscription.plan === "Pro" 
-                      ? "Full reporting and document storage" 
-                      : "Essential reporting features"}
-                </p>
-              </div>
-            </div>
-            
-            <div className="flex items-start">
-              <Check className="h-5 w-5 text-success mr-2 flex-shrink-0" />
-              <div>
-                <h5 className="text-sm font-medium text-primary">
-                  {subscription.plan === "Enterprise" 
-                    ? "24/7 Support" 
-                    : subscription.plan === "Pro" 
-                      ? "Dedicated Support" 
-                      : "Standard Support"}
-                </h5>
-                <p className="text-xs text-secondary">
-                  {subscription.plan === "Enterprise" 
-                    ? "24/7 phone, chat, and email support" 
-                    : subscription.plan === "Pro" 
-                      ? "Priority email and phone support" 
-                      : "Email support"}
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {subscription.plan !== "Enterprise" && (
-          <div className="border-t border-gray-200 mt-6 pt-6 flex flex-col md:flex-row md:items-center justify-between">
-            <div className="mb-4 md:mb-0">
-              <h4 className="text-sm font-semibold text-primary">Need more cases?</h4>
-              <p className="text-xs text-secondary mt-1">
-                {subscription.plan === "Basic" 
-                  ? "Upgrade to Pro for 20 cases per month" 
-                  : "Upgrade to Enterprise for unlimited cases"}
+              <h3 className="text-xl font-bold text-primary mt-2">
+                {subscription.plan === SUBSCRIPTION_PLANS.BASIC && "$49"}
+                {subscription.plan === SUBSCRIPTION_PLANS.PRO && "$149"}
+                {subscription.plan === SUBSCRIPTION_PLANS.ENTERPRISE && "Custom"}
+                <span className="text-sm font-normal text-secondary">/month</span>
+              </h3>
+              <p className="text-sm text-secondary mt-1">
+                Renews on {format(renewalDate, "MMMM d, yyyy")}
               </p>
             </div>
-            <div className="flex space-x-3">
+            
+            <div className="mt-4 md:mt-0">
+              <div className="flex items-center mb-2">
+                <Check className="text-success mr-2 h-4 w-4" />
+                <p className="text-sm text-secondary">
+                  {subscription.plan === SUBSCRIPTION_PLANS.BASIC && "5 cases per month"}
+                  {subscription.plan === SUBSCRIPTION_PLANS.PRO && "20 cases per month"}
+                  {subscription.plan === SUBSCRIPTION_PLANS.ENTERPRISE && "Unlimited cases"}
+                </p>
+              </div>
+              <div className="flex items-center mb-2">
+                <Check className="text-success mr-2 h-4 w-4" />
+                <p className="text-sm text-secondary">Priority support</p>
+              </div>
+              <div className="flex items-center">
+                <Check className="text-success mr-2 h-4 w-4" />
+                <p className="text-sm text-secondary">
+                  {subscription.plan === SUBSCRIPTION_PLANS.BASIC && "Basic reporting"}
+                  {subscription.plan === SUBSCRIPTION_PLANS.PRO && "Advanced reporting"}
+                  {subscription.plan === SUBSCRIPTION_PLANS.ENTERPRISE && "Custom reporting"}
+                </p>
+              </div>
+            </div>
+            
+            <div className="mt-6 md:mt-0">
               <Link href="/subscription">
-                <Button variant="outline" className="border-accent text-accent hover:bg-accent hover:text-white">
-                  Learn More
+                <Button className="bg-accent hover:bg-opacity-90 text-white px-6 py-2 rounded-md font-medium">
+                  Upgrade Plan
                 </Button>
               </Link>
-              <Button 
-                onClick={handleUpgrade}
-                disabled={isLoading}
-                className="bg-accent text-white hover:bg-accent-dark"
-              >
-                {isLoading ? (
-                  <div className="flex items-center">
-                    <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-b-2 border-white mr-2"></div>
-                    Processing...
-                  </div>
-                ) : (
-                  "Upgrade"
-                )}
-              </Button>
             </div>
           </div>
-        )}
-      </CardContent>
-    </Card>
+          
+          <div className="mt-6 pt-6 border-t border-gray-100">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-secondary">Case Usage</p>
+                <div className="flex items-center mt-1">
+                  <div className="w-full max-w-xs bg-gray-200 rounded-full h-2.5">
+                    <div 
+                      className="bg-accent h-2.5 rounded-full" 
+                      style={{ width: `${percentUsed}%` }}
+                    ></div>
+                  </div>
+                  <span className="text-xs text-secondary ml-3">
+                    {usedCases}/{maxCases} used
+                  </span>
+                </div>
+              </div>
+              
+              <div className="text-right">
+                <p className="text-sm font-medium text-secondary">Need More Cases?</p>
+                <Link href="/subscription">
+                  <Button variant="link" className="text-accent hover:underline text-sm font-medium mt-1 p-0">
+                    View Upgrade Options
+                  </Button>
+                </Link>
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
   );
 };
 

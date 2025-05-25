@@ -1,19 +1,14 @@
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import "./index.css";
-import { AuthProvider } from "./context/AuthContext";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "./lib/queryClient";
-import { Toaster } from "@/components/ui/toaster";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { UserProvider } from "./context/UserContext";
 
 createRoot(document.getElementById("root")!).render(
   <QueryClientProvider client={queryClient}>
-    <TooltipProvider>
-      <AuthProvider>
-        <App />
-        <Toaster />
-      </AuthProvider>
-    </TooltipProvider>
+    <UserProvider>
+      <App />
+    </UserProvider>
   </QueryClientProvider>
 );

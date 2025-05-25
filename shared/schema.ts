@@ -1,18 +1,49 @@
-import { 
-  pgTable, 
-  text, 
-  serial, 
-  varchar, 
-  timestamp, 
-  jsonb, 
-  boolean, 
-  integer, 
-  real, 
-  uuid,
-  index
+import {
+  pgTable,
+  text,
+  varchar,
+  timestamp,
+  serial,
+  integer,
+  boolean,
+  real,
+  jsonb,
+  index,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
+import { relations } from "drizzle-orm";
 import { z } from "zod";
+
+// User roles
+export const USER_ROLES = {
+  SUBSCRIBER: "subscriber",
+  INVESTIGATOR: "investigator",
+  ADMIN: "admin",
+} as const;
+
+// Subscription plans
+export const SUBSCRIPTION_PLANS = {
+  BASIC: "basic",
+  PRO: "pro",
+  ENTERPRISE: "enterprise",
+} as const;
+
+// Case statuses
+export const CASE_STATUS = {
+  NEW: "new",
+  ACTIVE: "active",
+  ON_HOLD: "on_hold",
+  COMPLETED: "completed",
+  CANCELLED: "cancelled",
+} as const;
+
+// Payment statuses
+export const PAYMENT_STATUS = {
+  PENDING: "pending",
+  PAID: "paid",
+  FAILED: "failed",
+  REFUNDED: "refunded",
+} as const;
 
 // Session storage table for authentication
 export const sessions = pgTable(
@@ -25,160 +56,334 @@ export const sessions = pgTable(
   (table) => [index("IDX_session_expire").on(table.expire)],
 );
 
-// Users table
+// User storage table
 export const users = pgTable("users", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  email: varchar("email").notNull().unique(),
-  password: varchar("password").notNull(),
+  id: varchar("id").primaryKey().notNull(),
+  email: varchar("email").unique(),
   firstName: varchar("first_name"),
   lastName: varchar("last_name"),
-  role: varchar("role").default("subscriber").notNull(), // subscriber, investigator, admin
   profileImageUrl: varchar("profile_image_url"),
-  phone: varchar("phone"),
+  role: text("role").notNull().default(USER_ROLES.SUBSCRIBER),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// User relations
+export const usersRelations = relations(users, ({ one, many }) => ({
+  subscriberProfile: one(subscriberProfiles, {
+    fields: [users.id],
+    references: [subscriberProfiles.userId],
+  }),
+  investigatorProfile: one(investigatorProfiles, {
+    fields: [users.id],
+    references: [investigatorProfiles.userId],
+  }),
+  cases: many(cases),
+  messages: many(messages, { relationName: "sender" }),
+  receivedMessages: many(messages, { relationName: "receiver" }),
+}));
+
+// Subscriber profiles
+export const subscriberProfiles = pgTable("subscriber_profiles", {
+  id: serial("id").primaryKey(),
+  userId: varchar("user_id").references(() => users.id).notNull().unique(),
   company: varchar("company"),
+  subscriptionPlan: text("subscription_plan").notNull().default(SUBSCRIPTION_PLANS.BASIC),
+  subscriptionRenewalDate: timestamp("subscription_renewal_date"),
+  paymentMethod: varchar("payment_method"),
+  casesRemaining: integer("cases_remaining").notNull().default(5),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Subscriber profile relations
+export const subscriberProfilesRelations = relations(subscriberProfiles, ({ one, many }) => ({
+  user: one(users, {
+    fields: [subscriberProfiles.userId],
+    references: [users.id],
+  }),
+  cases: many(cases),
+}));
+
+// Investigator profiles
+export const investigatorProfiles = pgTable("investigator_profiles", {
+  id: serial("id").primaryKey(),
+  userId: varchar("user_id").references(() => users.id).notNull().unique(),
+  title: varchar("title"),
   bio: text("bio"),
-  createdAt: timestamp("created_at").defaultNow(),
-  updatedAt: timestamp("updated_at").defaultNow(),
-});
-
-// Investigators table
-export const investigators = pgTable("investigators", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  userId: uuid("user_id").references(() => users.id),
-  firstName: varchar("first_name").notNull(),
-  lastName: varchar("last_name").notNull(),
-  specialization: varchar("specialization").notNull(),
-  bio: text("bio").notNull(),
-  rating: real("rating").default(0),
-  reviewCount: integer("review_count").default(0),
-  available: boolean("available").default(true),
-  nextAvailability: varchar("next_availability"),
-  skills: text("skills").array().notNull(), // Array of skills
-  location: varchar("location"),
   yearsOfExperience: integer("years_of_experience"),
-  licensedStates: text("licensed_states").array(), // Array of states
-  experience: text("experience"),
-  education: text("education"),
-  specializedTools: text("specialized_tools").array(), // Array of tools
-  profileImageUrl: varchar("profile_image_url"),
+  location: varchar("location"),
+  isAvailable: boolean("is_available").notNull().default(true),
+  averageRating: real("average_rating"),
+  reviewCount: integer("review_count").notNull().default(0),
+  specializations: text("specializations").array(),
+  skills: text("skills").array(),
+  hourlyRate: real("hourly_rate"),
+  isVerified: boolean("is_verified").notNull().default(false),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
-// Reviews table
-export const reviews = pgTable("reviews", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  investigatorId: uuid("investigator_id").references(() => investigators.id),
-  clientId: uuid("client_id").references(() => users.id),
-  clientName: varchar("client_name").notNull(),
-  rating: integer("rating").notNull(),
-  content: text("content").notNull(),
-  date: timestamp("date").defaultNow(),
-  caseType: varchar("case_type"),
-});
+// Investigator profile relations
+export const investigatorProfilesRelations = relations(investigatorProfiles, ({ one, many }) => ({
+  user: one(users, {
+    fields: [investigatorProfiles.userId],
+    references: [users.id],
+  }),
+  assignedCases: many(cases),
+  reviews: many(reviews),
+}));
 
 // Cases table
 export const cases = pgTable("cases", {
-  id: uuid("id").defaultRandom().primaryKey(),
+  id: serial("id").primaryKey(),
   title: varchar("title").notNull(),
   description: text("description").notNull(),
-  userId: uuid("user_id").references(() => users.id).notNull(),
-  investigatorId: uuid("investigator_id").references(() => investigators.id),
-  status: varchar("status").notNull(), // Pending, In Progress, Awaiting Info, Review Needed, Completed, Cancelled
-  type: varchar("type").notNull(), // background-check, asset-search, fraud-investigation, etc.
-  priority: varchar("priority").notNull(), // low, medium, high
+  status: text("status").notNull().default(CASE_STATUS.NEW),
+  clientId: varchar("client_id").references(() => users.id).notNull(),
+  investigatorId: varchar("investigator_id").references(() => users.id),
+  startDate: timestamp("start_date").defaultNow(),
+  endDate: timestamp("end_date"),
   location: varchar("location"),
-  budget: varchar("budget"),
-  timeframe: varchar("timeframe"),
+  caseType: varchar("case_type").notNull(),
+  progress: integer("progress").notNull().default(0),
   createdAt: timestamp("created_at").defaultNow(),
-  lastActivity: timestamp("last_activity").defaultNow(),
-  updates: jsonb("updates").default([]),
+  updatedAt: timestamp("updated_at").defaultNow(),
 });
+
+// Cases relations
+export const casesRelations = relations(cases, ({ one, many }) => ({
+  client: one(users, {
+    fields: [cases.clientId],
+    references: [users.id],
+  }),
+  investigator: one(users, {
+    fields: [cases.investigatorId],
+    references: [users.id],
+  }),
+  messages: many(messages),
+  payments: many(payments),
+}));
+
+// Reviews table
+export const reviews = pgTable("reviews", {
+  id: serial("id").primaryKey(),
+  investigatorId: varchar("investigator_id").references(() => users.id).notNull(),
+  clientId: varchar("client_id").references(() => users.id).notNull(),
+  caseId: integer("case_id").references(() => cases.id).notNull(),
+  rating: integer("rating").notNull(),
+  comment: text("comment"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// Reviews relations
+export const reviewsRelations = relations(reviews, ({ one }) => ({
+  investigator: one(users, {
+    fields: [reviews.investigatorId],
+    references: [users.id],
+  }),
+  client: one(users, {
+    fields: [reviews.clientId],
+    references: [users.id],
+  }),
+  case: one(cases, {
+    fields: [reviews.caseId],
+    references: [cases.id],
+  }),
+}));
 
 // Messages table
 export const messages = pgTable("messages", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  caseId: uuid("case_id").references(() => cases.id).notNull(),
-  senderId: uuid("sender_id").references(() => users.id).notNull(),
-  senderName: varchar("sender_name").notNull(),
-  senderAvatar: varchar("sender_avatar"),
+  id: serial("id").primaryKey(),
+  senderId: varchar("sender_id").references(() => users.id).notNull(),
+  receiverId: varchar("receiver_id").references(() => users.id).notNull(),
+  caseId: integer("case_id").references(() => cases.id),
   content: text("content").notNull(),
-  timestamp: timestamp("timestamp").defaultNow(),
+  isRead: boolean("is_read").notNull().default(false),
+  createdAt: timestamp("created_at").defaultNow(),
 });
+
+// Messages relations
+export const messagesRelations = relations(messages, ({ one }) => ({
+  sender: one(users, {
+    relationName: "sender",
+    fields: [messages.senderId],
+    references: [users.id],
+  }),
+  receiver: one(users, {
+    relationName: "receiver",
+    fields: [messages.receiverId],
+    references: [users.id],
+  }),
+  case: one(cases, {
+    fields: [messages.caseId],
+    references: [cases.id],
+  }),
+}));
+
+// Payments table
+export const payments = pgTable("payments", {
+  id: serial("id").primaryKey(),
+  caseId: integer("case_id").references(() => cases.id).notNull(),
+  clientId: varchar("client_id").references(() => users.id).notNull(),
+  investigatorId: varchar("investigator_id").references(() => users.id).notNull(),
+  amount: real("amount").notNull(),
+  status: text("status").notNull().default(PAYMENT_STATUS.PENDING),
+  transactionId: varchar("transaction_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Payments relations
+export const paymentsRelations = relations(payments, ({ one }) => ({
+  case: one(cases, {
+    fields: [payments.caseId],
+    references: [cases.id],
+  }),
+  client: one(users, {
+    fields: [payments.clientId],
+    references: [users.id],
+  }),
+  investigator: one(users, {
+    fields: [payments.investigatorId],
+    references: [users.id],
+  }),
+}));
 
 // Subscriptions table
 export const subscriptions = pgTable("subscriptions", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  userId: uuid("user_id").references(() => users.id).notNull(),
-  plan: varchar("plan").notNull(), // Basic, Pro, Enterprise
-  amount: integer("amount").notNull(),
-  billingCycle: varchar("billing_cycle").notNull(), // monthly, annually
-  status: varchar("status").notNull(), // active, cancelled, expired
-  startDate: timestamp("start_date").notNull(),
-  nextBillingDate: timestamp("next_billing_date").notNull(),
-  cancelledAt: timestamp("cancelled_at"),
+  id: serial("id").primaryKey(),
+  userId: varchar("user_id").references(() => users.id).notNull(),
+  plan: text("plan").notNull().default(SUBSCRIPTION_PLANS.BASIC),
+  startDate: timestamp("start_date").defaultNow(),
+  endDate: timestamp("end_date"),
+  isActive: boolean("is_active").notNull().default(true),
+  autoRenew: boolean("auto_renew").notNull().default(true),
+  paymentId: varchar("payment_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
 });
 
-// Schema definitions with Zod
-export const insertUserSchema = createInsertSchema(users, {
-  email: z.string().email("Please enter a valid email address"),
-  password: z.string().min(6, "Password must be at least 6 characters"),
-  role: z.enum(["subscriber", "investigator", "admin"]).default("subscriber"),
-}).omit({ id: true, createdAt: true, updatedAt: true });
+// Subscriptions relations
+export const subscriptionsRelations = relations(subscriptions, ({ one }) => ({
+  user: one(users, {
+    fields: [subscriptions.userId],
+    references: [users.id],
+  }),
+}));
 
-export const loginUserSchema = z.object({
-  email: z.string().email("Please enter a valid email address"),
-  password: z.string().min(1, "Password is required"),
+// Notifications table
+export const notifications = pgTable("notifications", {
+  id: serial("id").primaryKey(),
+  userId: varchar("user_id").references(() => users.id).notNull(),
+  title: varchar("title").notNull(),
+  content: text("content").notNull(),
+  isRead: boolean("is_read").notNull().default(false),
+  link: varchar("link"),
+  createdAt: timestamp("created_at").defaultNow(),
 });
 
-export const createCaseSchema = createInsertSchema(cases, {
-  title: z.string().min(5, "Title must be at least 5 characters").max(100, "Title must be less than 100 characters"),
-  description: z.string().min(20, "Description must be at least 20 characters").max(1000, "Description must be less than 1000 characters"),
-  type: z.string().min(1, "Please select a case type"),
-  priority: z.string().min(1, "Please select a priority level"),
-}).omit({ id: true, userId: true, status: true, createdAt: true, lastActivity: true });
+// Notifications relations
+export const notificationsRelations = relations(notifications, ({ one }) => ({
+  user: one(users, {
+    fields: [notifications.userId],
+    references: [users.id],
+  }),
+}));
 
-export const messageSchema = z.object({
-  content: z.string().min(1, "Message cannot be empty"),
+// Insertion schemas
+export const insertUserSchema = createInsertSchema(users).pick({
+  email: true,
+  firstName: true,
+  lastName: true,
+  profileImageUrl: true,
+  role: true,
 });
 
-export const subscriptionPlanSchema = z.object({
-  plan: z.enum(["Basic", "Pro", "Enterprise"]),
-  interval: z.enum(["month", "year"]),
+export const insertSubscriberProfileSchema = createInsertSchema(subscriberProfiles).pick({
+  userId: true,
+  company: true,
+  subscriptionPlan: true,
+  paymentMethod: true,
 });
 
-export const investigatorFilterSchema = z.object({
-  search: z.string().optional(),
-  specialization: z.string().optional(),
-  available: z.enum(["available", "unavailable", ""]).optional(),
-  rating: z.string().optional(),
-  skills: z.array(z.string()).optional(),
-}).partial();
+export const insertInvestigatorProfileSchema = createInsertSchema(investigatorProfiles).pick({
+  userId: true,
+  title: true,
+  bio: true,
+  yearsOfExperience: true,
+  location: true,
+  specializations: true,
+  skills: true,
+  hourlyRate: true,
+});
 
-// Types
+export const insertCaseSchema = createInsertSchema(cases).pick({
+  title: true,
+  description: true,
+  clientId: true,
+  investigatorId: true,
+  location: true,
+  caseType: true,
+});
+
+export const insertReviewSchema = createInsertSchema(reviews).pick({
+  investigatorId: true,
+  clientId: true,
+  caseId: true,
+  rating: true,
+  comment: true,
+});
+
+export const insertMessageSchema = createInsertSchema(messages).pick({
+  senderId: true,
+  receiverId: true,
+  caseId: true,
+  content: true,
+});
+
+export const insertPaymentSchema = createInsertSchema(payments).pick({
+  caseId: true,
+  clientId: true,
+  investigatorId: true,
+  amount: true,
+  status: true,
+  transactionId: true,
+});
+
+export const insertSubscriptionSchema = createInsertSchema(subscriptions).pick({
+  userId: true,
+  plan: true,
+  startDate: true,
+  endDate: true,
+  autoRenew: true,
+  paymentId: true,
+});
+
+export const insertNotificationSchema = createInsertSchema(notifications).pick({
+  userId: true,
+  title: true,
+  content: true,
+  link: true,
+});
+
+// Type definitions
+export type UpsertUser = typeof users.$inferInsert;
 export type User = typeof users.$inferSelect;
-export type InsertUser = z.infer<typeof insertUserSchema>;
-
-export type Case = typeof cases.$inferSelect & {
-  investigator?: Investigator;
-};
-export type InsertCase = typeof cases.$inferInsert;
-
-export type Message = typeof messages.$inferSelect;
-export type InsertMessage = typeof messages.$inferInsert;
-
-export type Subscription = typeof subscriptions.$inferSelect & {
-  casesUsed?: number;
-  remainingCases?: number;
-};
-export type InsertSubscription = typeof subscriptions.$inferInsert;
-
+export type SubscriberProfile = typeof subscriberProfiles.$inferSelect;
+export type InsertSubscriberProfile = z.infer<typeof insertSubscriberProfileSchema>;
+export type InvestigatorProfile = typeof investigatorProfiles.$inferSelect;
+export type InsertInvestigatorProfile = z.infer<typeof insertInvestigatorProfileSchema>;
+export type Case = typeof cases.$inferSelect;
+export type InsertCase = z.infer<typeof insertCaseSchema>;
 export type Review = typeof reviews.$inferSelect;
-export type InsertReview = typeof reviews.$inferInsert;
-
-export type Investigator = typeof investigators.$inferSelect & {
-  reviews?: Review[];
-};
-export type InsertInvestigator = typeof investigators.$inferInsert;
-
-export type InvestigatorFilters = z.infer<typeof investigatorFilterSchema>;
+export type InsertReview = z.infer<typeof insertReviewSchema>;
+export type Message = typeof messages.$inferSelect;
+export type InsertMessage = z.infer<typeof insertMessageSchema>;
+export type Payment = typeof payments.$inferSelect;
+export type InsertPayment = z.infer<typeof insertPaymentSchema>;
+export type Subscription = typeof subscriptions.$inferSelect;
+export type InsertSubscription = z.infer<typeof insertSubscriptionSchema>;
+export type Notification = typeof notifications.$inferSelect;
+export type InsertNotification = z.infer<typeof insertNotificationSchema>;

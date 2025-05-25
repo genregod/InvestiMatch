@@ -1,67 +1,67 @@
-import { db } from "./db";
-import { eq, desc, and, or, like, not, gte, lte } from "drizzle-orm";
 import { 
-  users,
-  cases,
-  investigators,
-  messages,
-  subscriptions,
-  reviews,
-  type User,
-  type InsertUser,
-  type Case,
-  type InsertCase,
-  type Message,
-  type InsertMessage,
-  type Subscription,
-  type InsertSubscription,
-  type Investigator,
-  type InvestigatorFilters
+  users, cases, subscriberProfiles, investigatorProfiles, 
+  reviews, messages, payments, subscriptions, notifications,
+  type User, type UpsertUser, type Case, type InsertCase,
+  type SubscriberProfile, type InsertSubscriberProfile,
+  type InvestigatorProfile, type InsertInvestigatorProfile,
+  type Review, type InsertReview, type Message, type InsertMessage,
+  type Payment, type InsertPayment, type Subscription, type InsertSubscription,
+  type Notification, type InsertNotification,
+  USER_ROLES, SUBSCRIPTION_PLANS
 } from "@shared/schema";
+import { db } from "./db";
+import { eq, and, like, gte, desc, or, isNull, isNotNull } from "drizzle-orm";
 
 // Interface for storage operations
 export interface IStorage {
-  // User operations
+  // User operations (required for Replit Auth)
   getUser(id: string): Promise<User | undefined>;
-  getUserByEmail(email: string): Promise<User | undefined>;
-  createUser(user: InsertUser): Promise<User>;
-  updateUser(id: string, updates: Partial<User>): Promise<User>;
-  getAllUsers(): Promise<User[]>;
+  upsertUser(user: UpsertUser): Promise<User>;
+  
+  // Subscriber profile operations
+  getSubscriberProfile(userId: string): Promise<SubscriberProfile | undefined>;
+  createSubscriberProfile(profile: InsertSubscriberProfile): Promise<SubscriberProfile>;
+  updateSubscriberProfile(userId: string, profile: Partial<InsertSubscriberProfile>): Promise<SubscriberProfile | undefined>;
+  
+  // Investigator profile operations
+  getInvestigatorProfile(userId: string): Promise<InvestigatorProfile | undefined>;
+  createInvestigatorProfile(profile: InsertInvestigatorProfile): Promise<InvestigatorProfile>;
+  updateInvestigatorProfile(userId: string, profile: Partial<InsertInvestigatorProfile>): Promise<InvestigatorProfile | undefined>;
+  listInvestigators(search?: string, specialization?: string, location?: string, isAvailable?: boolean): Promise<(InvestigatorProfile & { user: User })[]>;
   
   // Case operations
-  getCasesByUserId(userId: string): Promise<Case[]>;
-  getActiveCasesByUserId(userId: string): Promise<Case[]>;
-  getCaseById(id: string): Promise<Case | undefined>;
+  getCase(id: number): Promise<Case | undefined>;
   createCase(caseData: InsertCase): Promise<Case>;
-  updateCase(id: string, updates: Partial<Case>): Promise<Case>;
-  deleteCase(id: string): Promise<void>;
-  getCaseCountByUserId(userId: string): Promise<number>;
-  getAllCases(): Promise<Case[]>;
+  updateCase(id: number, caseData: Partial<InsertCase>): Promise<Case | undefined>;
+  listCasesByClient(clientId: string): Promise<Case[]>;
+  listCasesByInvestigator(investigatorId: string): Promise<Case[]>;
   
-  // Investigator operations
-  getInvestigators(filters?: InvestigatorFilters): Promise<Investigator[]>;
-  getTopInvestigators(): Promise<Investigator[]>;
-  getInvestigatorById(id: string): Promise<Investigator | undefined>;
+  // Review operations
+  createReview(review: InsertReview): Promise<Review>;
+  getReviewsByInvestigator(investigatorId: string): Promise<Review[]>;
   
   // Message operations
-  getMessagesByCaseId(caseId: string): Promise<Message[]>;
   createMessage(message: InsertMessage): Promise<Message>;
+  getMessagesByCase(caseId: number): Promise<Message[]>;
+  getUnreadMessageCount(userId: string): Promise<number>;
+  
+  // Payment operations
+  createPayment(payment: InsertPayment): Promise<Payment>;
+  updatePaymentStatus(id: number, status: string): Promise<Payment | undefined>;
   
   // Subscription operations
-  getSubscriptionByUserId(userId: string): Promise<Subscription | undefined>;
+  getSubscription(userId: string): Promise<Subscription | undefined>;
   createSubscription(subscription: InsertSubscription): Promise<Subscription>;
-  updateSubscription(id: string, updates: Partial<Subscription>): Promise<Subscription>;
-  getAllSubscriptions(): Promise<Subscription[]>;
+  updateSubscription(userId: string, subscription: Partial<InsertSubscription>): Promise<Subscription | undefined>;
   
-  // Admin operations
-  getAdminStats(): Promise<{
-    totalUsers: number;
-    totalCases: number;
-    totalInvestigators: number;
-    totalSubscriptions: number;
-    revenueByPlan: { plan: string; count: number; revenue: number }[];
-    casesByStatus: { status: string; count: number }[];
-  }>;
+  // Notification operations
+  createNotification(notification: InsertNotification): Promise<Notification>;
+  getNotificationsByUser(userId: string): Promise<Notification[]>;
+  markNotificationAsRead(id: number): Promise<Notification | undefined>;
+  getUnreadNotificationCount(userId: string): Promise<number>;
+  
+  // Dashboard operations
+  getDashboardStats(userId: string): Promise<any>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -70,374 +70,364 @@ export class DatabaseStorage implements IStorage {
     const [user] = await db.select().from(users).where(eq(users.id, id));
     return user;
   }
-  
-  async getUserByEmail(email: string): Promise<User | undefined> {
-    const [user] = await db.select().from(users).where(eq(users.email, email));
+
+  async upsertUser(userData: UpsertUser): Promise<User> {
+    const [user] = await db
+      .insert(users)
+      .values(userData)
+      .onConflictDoUpdate({
+        target: users.id,
+        set: {
+          ...userData,
+          updatedAt: new Date(),
+        },
+      })
+      .returning();
     return user;
   }
-  
-  async createUser(userData: InsertUser): Promise<User> {
-    const [user] = await db.insert(users).values(userData).returning();
-    return user;
+
+  // Subscriber profile operations
+  async getSubscriberProfile(userId: string): Promise<SubscriberProfile | undefined> {
+    const [profile] = await db
+      .select()
+      .from(subscriberProfiles)
+      .where(eq(subscriberProfiles.userId, userId));
+    return profile;
   }
-  
-  async updateUser(id: string, updates: Partial<User>): Promise<User> {
-    const [updatedUser] = await db
-      .update(users)
-      .set(updates)
-      .where(eq(users.id, id))
+
+  async createSubscriberProfile(profile: InsertSubscriberProfile): Promise<SubscriberProfile> {
+    const [subscriberProfile] = await db
+      .insert(subscriberProfiles)
+      .values(profile)
       .returning();
-    return updatedUser;
+    return subscriberProfile;
   }
-  
-  async getAllUsers(): Promise<User[]> {
-    return await db.select().from(users);
-  }
-  
-  // Case operations
-  async getCasesByUserId(userId: string): Promise<Case[]> {
-    const userCases = await db
-      .select()
-      .from(cases)
-      .where(or(eq(cases.userId, userId), eq(cases.investigatorId, userId)))
-      .orderBy(desc(cases.lastActivity));
-      
-    // For each case, fetch the investigator details
-    const casesWithInvestigators = await Promise.all(
-      userCases.map(async (caseItem) => {
-        if (caseItem.investigatorId) {
-          const investigator = await this.getInvestigatorById(caseItem.investigatorId);
-          return {
-            ...caseItem,
-            investigator: investigator
-          };
-        }
-        return caseItem;
+
+  async updateSubscriberProfile(
+    userId: string,
+    profile: Partial<InsertSubscriberProfile>
+  ): Promise<SubscriberProfile | undefined> {
+    const [updatedProfile] = await db
+      .update(subscriberProfiles)
+      .set({
+        ...profile,
+        updatedAt: new Date(),
       })
-    );
-    
-    return casesWithInvestigators;
-  }
-  
-  async getActiveCasesByUserId(userId: string): Promise<Case[]> {
-    const activeCases = await db
-      .select()
-      .from(cases)
-      .where(
-        and(
-          or(eq(cases.userId, userId), eq(cases.investigatorId, userId)),
-          not(or(eq(cases.status, "Completed"), eq(cases.status, "Cancelled")))
-        )
-      )
-      .orderBy(desc(cases.lastActivity));
-      
-    // For each case, fetch the investigator details
-    const casesWithInvestigators = await Promise.all(
-      activeCases.map(async (caseItem) => {
-        if (caseItem.investigatorId) {
-          const investigator = await this.getInvestigatorById(caseItem.investigatorId);
-          return {
-            ...caseItem,
-            investigator: investigator
-          };
-        }
-        return caseItem;
-      })
-    );
-    
-    return casesWithInvestigators;
-  }
-  
-  async getCaseById(id: string): Promise<Case | undefined> {
-    const [caseData] = await db.select().from(cases).where(eq(cases.id, id));
-    
-    if (!caseData) {
-      return undefined;
-    }
-    
-    // Fetch investigator if assigned
-    if (caseData.investigatorId) {
-      const investigator = await this.getInvestigatorById(caseData.investigatorId);
-      return {
-        ...caseData,
-        investigator
-      };
-    }
-    
-    return caseData;
-  }
-  
-  async createCase(caseData: InsertCase): Promise<Case> {
-    const [newCase] = await db.insert(cases).values(caseData).returning();
-    
-    // Fetch investigator if assigned
-    if (newCase.investigatorId) {
-      const investigator = await this.getInvestigatorById(newCase.investigatorId);
-      return {
-        ...newCase,
-        investigator
-      };
-    }
-    
-    return newCase;
-  }
-  
-  async updateCase(id: string, updates: Partial<Case>): Promise<Case> {
-    const [updatedCase] = await db
-      .update(cases)
-      .set(updates)
-      .where(eq(cases.id, id))
+      .where(eq(subscriberProfiles.userId, userId))
       .returning();
-      
-    // Fetch investigator if assigned
-    if (updatedCase.investigatorId) {
-      const investigator = await this.getInvestigatorById(updatedCase.investigatorId);
-      return {
-        ...updatedCase,
-        investigator
-      };
-    }
-    
-    return updatedCase;
+    return updatedProfile;
   }
-  
-  async deleteCase(id: string): Promise<void> {
-    await db.delete(cases).where(eq(cases.id, id));
-  }
-  
-  async getCaseCountByUserId(userId: string): Promise<number> {
-    const result = await db
-      .select({ count: db.fn.count() })
-      .from(cases)
-      .where(eq(cases.userId, userId));
-    
-    return Number(result[0].count) || 0;
-  }
-  
-  async getAllCases(): Promise<Case[]> {
-    const allCases = await db.select().from(cases);
-    
-    // For each case, fetch the investigator details
-    const casesWithInvestigators = await Promise.all(
-      allCases.map(async (caseItem) => {
-        if (caseItem.investigatorId) {
-          const investigator = await this.getInvestigatorById(caseItem.investigatorId);
-          return {
-            ...caseItem,
-            investigator: investigator
-          };
-        }
-        return caseItem;
-      })
-    );
-    
-    return casesWithInvestigators;
-  }
-  
-  // Investigator operations
-  async getInvestigators(filters?: InvestigatorFilters): Promise<Investigator[]> {
-    let query = db.select().from(investigators);
-    
-    if (filters) {
-      if (filters.search) {
-        query = query.where(
-          or(
-            like(investigators.firstName, `%${filters.search}%`),
-            like(investigators.lastName, `%${filters.search}%`),
-            like(investigators.specialization, `%${filters.search}%`)
-          )
-        );
-      }
-      
-      if (filters.specialization) {
-        query = query.where(like(investigators.specialization, `%${filters.specialization}%`));
-      }
-      
-      if (filters.available === 'available') {
-        query = query.where(eq(investigators.available, true));
-      } else if (filters.available === 'unavailable') {
-        query = query.where(eq(investigators.available, false));
-      }
-      
-      if (filters.rating) {
-        query = query.where(gte(investigators.rating, parseFloat(filters.rating)));
-      }
-      
-      // Skill filtering would require a more complex query with JSON operators or a skills table
-      // This is a simplified implementation
-    }
-    
-    // Get investigators with reviews
-    const investigatorsData = await query;
-    
-    return investigatorsData;
-  }
-  
-  async getTopInvestigators(): Promise<Investigator[]> {
-    return await db
+
+  // Investigator profile operations
+  async getInvestigatorProfile(userId: string): Promise<InvestigatorProfile | undefined> {
+    const [profile] = await db
       .select()
-      .from(investigators)
-      .orderBy(desc(investigators.rating))
-      .limit(3);
+      .from(investigatorProfiles)
+      .where(eq(investigatorProfiles.userId, userId));
+    return profile;
   }
-  
-  async getInvestigatorById(id: string): Promise<Investigator | undefined> {
-    const [investigator] = await db
-      .select()
-      .from(investigators)
-      .where(eq(investigators.id, id));
-      
-    if (!investigator) {
-      return undefined;
-    }
-    
-    // Fetch reviews for this investigator
-    const investigatorReviews = await db
-      .select()
-      .from(reviews)
-      .where(eq(reviews.investigatorId, id))
-      .orderBy(desc(reviews.date));
-      
-    return {
-      ...investigator,
-      reviews: investigatorReviews
-    };
-  }
-  
-  // Message operations
-  async getMessagesByCaseId(caseId: string): Promise<Message[]> {
-    return await db
-      .select()
-      .from(messages)
-      .where(eq(messages.caseId, caseId))
-      .orderBy(messages.timestamp);
-  }
-  
-  async createMessage(messageData: InsertMessage): Promise<Message> {
-    const [message] = await db
-      .insert(messages)
-      .values(messageData)
+
+  async createInvestigatorProfile(profile: InsertInvestigatorProfile): Promise<InvestigatorProfile> {
+    const [investigatorProfile] = await db
+      .insert(investigatorProfiles)
+      .values(profile)
       .returning();
-    
-    return message;
+    return investigatorProfile;
   }
-  
-  // Subscription operations
-  async getSubscriptionByUserId(userId: string): Promise<Subscription | undefined> {
-    const [subscription] = await db
-      .select()
-      .from(subscriptions)
-      .where(
-        and(
-          eq(subscriptions.userId, userId),
-          eq(subscriptions.status, "active")
+
+  async updateInvestigatorProfile(
+    userId: string,
+    profile: Partial<InsertInvestigatorProfile>
+  ): Promise<InvestigatorProfile | undefined> {
+    const [updatedProfile] = await db
+      .update(investigatorProfiles)
+      .set({
+        ...profile,
+        updatedAt: new Date(),
+      })
+      .where(eq(investigatorProfiles.userId, userId))
+      .returning();
+    return updatedProfile;
+  }
+
+  async listInvestigators(
+    search?: string,
+    specialization?: string,
+    location?: string,
+    isAvailable?: boolean
+  ): Promise<(InvestigatorProfile & { user: User })[]> {
+    let query = db
+      .select({
+        profile: investigatorProfiles,
+        user: users,
+      })
+      .from(investigatorProfiles)
+      .innerJoin(users, eq(investigatorProfiles.userId, users.id));
+
+    // Apply filters if provided
+    const conditions = [];
+
+    if (search) {
+      conditions.push(
+        or(
+          like(users.firstName, `%${search}%`),
+          like(users.lastName, `%${search}%`),
+          like(investigatorProfiles.title, `%${search}%`),
+          like(investigatorProfiles.bio, `%${search}%`)
         )
       );
-    
-    return subscription;
+    }
+
+    if (specialization) {
+      // Note: This is a simplification. In a real DB you'd need a more sophisticated approach for array contains
+      conditions.push(like(investigatorProfiles.specializations.toString(), `%${specialization}%`));
+    }
+
+    if (location) {
+      conditions.push(like(investigatorProfiles.location, `%${location}%`));
+    }
+
+    if (isAvailable !== undefined) {
+      conditions.push(eq(investigatorProfiles.isAvailable, isAvailable));
+    }
+
+    if (conditions.length > 0) {
+      query = query.where(and(...conditions));
+    }
+
+    const results = await query.orderBy(desc(investigatorProfiles.averageRating));
+
+    return results.map(({ profile, user }) => ({
+      ...profile,
+      user,
+    }));
   }
-  
-  async createSubscription(subscriptionData: InsertSubscription): Promise<Subscription> {
+
+  // Case operations
+  async getCase(id: number): Promise<Case | undefined> {
+    const [caseItem] = await db.select().from(cases).where(eq(cases.id, id));
+    return caseItem;
+  }
+
+  async createCase(caseData: InsertCase): Promise<Case> {
+    const [newCase] = await db.insert(cases).values(caseData).returning();
+    return newCase;
+  }
+
+  async updateCase(id: number, caseData: Partial<InsertCase>): Promise<Case | undefined> {
+    const [updatedCase] = await db
+      .update(cases)
+      .set({
+        ...caseData,
+        updatedAt: new Date(),
+      })
+      .where(eq(cases.id, id))
+      .returning();
+    return updatedCase;
+  }
+
+  async listCasesByClient(clientId: string): Promise<Case[]> {
+    return db.select().from(cases).where(eq(cases.clientId, clientId));
+  }
+
+  async listCasesByInvestigator(investigatorId: string): Promise<Case[]> {
+    return db.select().from(cases).where(eq(cases.investigatorId, investigatorId));
+  }
+
+  // Review operations
+  async createReview(review: InsertReview): Promise<Review> {
+    const [newReview] = await db.insert(reviews).values(review).returning();
+    
+    // Update investigator's average rating
+    const investigatorReviews = await this.getReviewsByInvestigator(review.investigatorId);
+    const averageRating = investigatorReviews.reduce((sum, review) => sum + review.rating, 0) / investigatorReviews.length;
+    
+    await db
+      .update(investigatorProfiles)
+      .set({ 
+        averageRating, 
+        reviewCount: investigatorReviews.length,
+        updatedAt: new Date() 
+      })
+      .where(eq(investigatorProfiles.userId, review.investigatorId));
+    
+    return newReview;
+  }
+
+  async getReviewsByInvestigator(investigatorId: string): Promise<Review[]> {
+    return db.select().from(reviews).where(eq(reviews.investigatorId, investigatorId));
+  }
+
+  // Message operations
+  async createMessage(message: InsertMessage): Promise<Message> {
+    const [newMessage] = await db.insert(messages).values(message).returning();
+    return newMessage;
+  }
+
+  async getMessagesByCase(caseId: number): Promise<Message[]> {
+    return db.select().from(messages).where(eq(messages.caseId, caseId)).orderBy(messages.createdAt);
+  }
+
+  async getUnreadMessageCount(userId: string): Promise<number> {
+    const result = await db
+      .select()
+      .from(messages)
+      .where(and(eq(messages.receiverId, userId), eq(messages.isRead, false)));
+    return result.length;
+  }
+
+  // Payment operations
+  async createPayment(payment: InsertPayment): Promise<Payment> {
+    const [newPayment] = await db.insert(payments).values(payment).returning();
+    return newPayment;
+  }
+
+  async updatePaymentStatus(id: number, status: string): Promise<Payment | undefined> {
+    const [updatedPayment] = await db
+      .update(payments)
+      .set({
+        status,
+        updatedAt: new Date(),
+      })
+      .where(eq(payments.id, id))
+      .returning();
+    return updatedPayment;
+  }
+
+  // Subscription operations
+  async getSubscription(userId: string): Promise<Subscription | undefined> {
     const [subscription] = await db
-      .insert(subscriptions)
-      .values(subscriptionData)
-      .returning();
-    
-    return subscription;
-  }
-  
-  async updateSubscription(id: string, updates: Partial<Subscription>): Promise<Subscription> {
-    const [updatedSubscription] = await db
-      .update(subscriptions)
-      .set(updates)
-      .where(eq(subscriptions.id, id))
-      .returning();
-    
-    return updatedSubscription;
-  }
-  
-  async getAllSubscriptions(): Promise<Subscription[]> {
-    return await db.select().from(subscriptions);
-  }
-  
-  // Admin operations
-  async getAdminStats(): Promise<{
-    totalUsers: number;
-    totalCases: number;
-    totalInvestigators: number;
-    totalSubscriptions: number;
-    revenueByPlan: { plan: string; count: number; revenue: number }[];
-    casesByStatus: { status: string; count: number }[];
-  }> {
-    // Get total counts
-    const [userCount] = await db
-      .select({ count: db.fn.count() })
-      .from(users);
-      
-    const [caseCount] = await db
-      .select({ count: db.fn.count() })
-      .from(cases);
-      
-    const [investigatorCount] = await db
-      .select({ count: db.fn.count() })
-      .from(investigators);
-      
-    const [subscriptionCount] = await db
-      .select({ count: db.fn.count() })
-      .from(subscriptions)
-      .where(eq(subscriptions.status, "active"));
-    
-    // Get revenue by plan
-    const activeSubscriptions = await db
       .select()
       .from(subscriptions)
-      .where(eq(subscriptions.status, "active"));
+      .where(and(eq(subscriptions.userId, userId), eq(subscriptions.isActive, true)))
+      .orderBy(desc(subscriptions.createdAt));
+    return subscription;
+  }
+
+  async createSubscription(subscription: InsertSubscription): Promise<Subscription> {
+    const [newSubscription] = await db.insert(subscriptions).values(subscription).returning();
+    return newSubscription;
+  }
+
+  async updateSubscription(
+    userId: string,
+    subscription: Partial<InsertSubscription>
+  ): Promise<Subscription | undefined> {
+    const [updatedSubscription] = await db
+      .update(subscriptions)
+      .set({
+        ...subscription,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(subscriptions.userId, userId), eq(subscriptions.isActive, true)))
+      .returning();
+    return updatedSubscription;
+  }
+
+  // Notification operations
+  async createNotification(notification: InsertNotification): Promise<Notification> {
+    const [newNotification] = await db.insert(notifications).values(notification).returning();
+    return newNotification;
+  }
+
+  async getNotificationsByUser(userId: string): Promise<Notification[]> {
+    return db
+      .select()
+      .from(notifications)
+      .where(eq(notifications.userId, userId))
+      .orderBy(desc(notifications.createdAt));
+  }
+
+  async markNotificationAsRead(id: number): Promise<Notification | undefined> {
+    const [updatedNotification] = await db
+      .update(notifications)
+      .set({
+        isRead: true,
+      })
+      .where(eq(notifications.id, id))
+      .returning();
+    return updatedNotification;
+  }
+
+  async getUnreadNotificationCount(userId: string): Promise<number> {
+    const result = await db
+      .select()
+      .from(notifications)
+      .where(and(eq(notifications.userId, userId), eq(notifications.isRead, false)));
+    return result.length;
+  }
+
+  // Dashboard operations
+  async getDashboardStats(userId: string): Promise<any> {
+    const user = await this.getUser(userId);
+    
+    if (!user) {
+      throw new Error("User not found");
+    }
+    
+    if (user.role === USER_ROLES.SUBSCRIBER) {
+      const subscriberProfile = await this.getSubscriberProfile(userId);
+      const activeCases = await db
+        .select()
+        .from(cases)
+        .where(and(eq(cases.clientId, userId), or(eq(cases.status, 'active'), eq(cases.status, 'new'))))
+        .orderBy(desc(cases.createdAt));
       
-    const revenueByPlan = [
-      {
-        plan: "Basic",
-        count: activeSubscriptions.filter(s => s.plan === "Basic").length,
-        revenue: activeSubscriptions
-          .filter(s => s.plan === "Basic")
-          .reduce((sum, s) => sum + s.amount, 0)
-      },
-      {
-        plan: "Pro",
-        count: activeSubscriptions.filter(s => s.plan === "Pro").length,
-        revenue: activeSubscriptions
-          .filter(s => s.plan === "Pro")
-          .reduce((sum, s) => sum + s.amount, 0)
-      },
-      {
-        plan: "Enterprise",
-        count: activeSubscriptions.filter(s => s.plan === "Enterprise").length,
-        revenue: activeSubscriptions
-          .filter(s => s.plan === "Enterprise")
-          .reduce((sum, s) => sum + s.amount, 0)
-      }
-    ];
+      const unreadMessages = await this.getUnreadMessageCount(userId);
+      const activeInvestigators = await db
+        .select()
+        .from(cases)
+        .where(and(
+          eq(cases.clientId, userId),
+          or(eq(cases.status, 'active'), eq(cases.status, 'new')),
+          isNotNull(cases.investigatorId)
+        ))
+        .groupBy(cases.investigatorId);
+      
+      const subscription = await this.getSubscription(userId);
+      
+      return {
+        activeCasesCount: activeCases.length,
+        casesRemaining: subscriberProfile?.casesRemaining || 0,
+        unreadMessagesCount: unreadMessages,
+        activeInvestigatorsCount: activeInvestigators.length,
+        subscription,
+        cases: activeCases
+      };
+    } else if (user.role === USER_ROLES.INVESTIGATOR) {
+      const investigatorProfile = await this.getInvestigatorProfile(userId);
+      const activeCases = await db
+        .select()
+        .from(cases)
+        .where(and(eq(cases.investigatorId, userId), or(eq(cases.status, 'active'), eq(cases.status, 'new'))))
+        .orderBy(desc(cases.createdAt));
+      
+      const unreadMessages = await this.getUnreadMessageCount(userId);
+      const pendingPayments = await db
+        .select()
+        .from(payments)
+        .where(and(eq(payments.investigatorId, userId), eq(payments.status, 'pending')));
+      
+      return {
+        activeCasesCount: activeCases.length,
+        unreadMessagesCount: unreadMessages,
+        pendingPaymentsCount: pendingPayments.length,
+        investigatorProfile,
+        cases: activeCases
+      };
+    } else if (user.role === USER_ROLES.ADMIN) {
+      const totalUsers = await db.select().from(users).groupBy(users.role);
+      const totalCases = await db.select().from(cases).groupBy(cases.status);
+      const totalPayments = await db.select().from(payments).groupBy(payments.status);
+      
+      return {
+        userStats: totalUsers,
+        caseStats: totalCases,
+        paymentStats: totalPayments
+      };
+    }
     
-    // Get cases by status
-    const allCases = await db.select().from(cases);
-    const statusCounts: Record<string, number> = {};
-    
-    allCases.forEach(c => {
-      statusCounts[c.status] = (statusCounts[c.status] || 0) + 1;
-    });
-    
-    const casesByStatus = Object.entries(statusCounts).map(([status, count]) => ({
-      status,
-      count
-    }));
-    
-    return {
-      totalUsers: Number(userCount.count) || 0,
-      totalCases: Number(caseCount.count) || 0,
-      totalInvestigators: Number(investigatorCount.count) || 0,
-      totalSubscriptions: Number(subscriptionCount.count) || 0,
-      revenueByPlan,
-      casesByStatus
-    };
+    return {};
   }
 }
 
